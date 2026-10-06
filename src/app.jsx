@@ -2679,13 +2679,455 @@ const SearchLogPage=({nav})=>{
 };
 
 
-const YOU_FOLDERS=[
-  {id:'minecraft',ar:'Minecraft',en:'Minecraft',q:'minecraft'},
-  {id:'chat',ar:'تواصل',en:'Connect',q:'messenger whatsapp chat social'},
-  {id:'tools',ar:'ادوات',en:'Tools',q:'tools calculator file manager'},
-  {id:'fun',ar:'رفاهية',en:'Leisure',q:'entertainment lifestyle video relax'},
-];
-const YouPage=window.APKYouPage;
+/* APKDroid You section: catalog, store, and P2P chat */
+const youBus = { ls: {}, on(ev, fn) { (this.ls[ev] = this.ls[ev] || []).push(fn); return () => { this.ls[ev] = (this.ls[ev] || []).filter((f) => f !== fn); }; }, emit(ev, p) { (this.ls[ev] || []).forEach((f) => { try { f(p); } catch (e) {} }); } };
+const YOU_CHAT_KEY = "apk_you_chats";
+const youLoadChats = () => { try { const v = JSON.parse(localStorage.getItem(YOU_CHAT_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
+const youSaveChats = (list) => { try { localStorage.setItem(YOU_CHAT_KEY, JSON.stringify(list)); } catch (e) {} youBus.emit("chats", list); };
+const youUpsertChat = (chat) => { const list = youLoadChats(); const i = list.findIndex((c) => c.id === chat.id); if (i >= 0) list[i] = chat; else list.unshift(chat); youSaveChats(list); return chat; };
+const youPatchChat = (id, fn) => { const list = youLoadChats(); const i = list.findIndex((c) => c.id === id); if (i < 0) return null; const next = fn(Object.assign({}, list[i], { messages: (list[i].messages || []).slice() })); list.splice(i, 1); list.unshift(next); youSaveChats(list); return next; };
+const youFmtTime = (ts) => { try { return new Date(ts).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } };
+const youB64 = (bytes) => { let s = ""; const chunk = 0x8000; for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)); return btoa(s); };
+const youFromB64 = (s) => { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; };
+const youEncodeCode = (obj) => { const json = JSON.stringify(obj); const bytes = new TextEncoder().encode(json); return youB64(bytes).replace(/=+$/g, ""); };
+const youDecodeCode = (code) => { const clean = String(code || "").replace(/\s+/g, ""); const pad = clean + "===".slice((clean.length + 3) % 4); const json = new TextDecoder().decode(youFromB64(pad)); return JSON.parse(json); };
+const youP2P = {
+  pc: null, dc: null, chatId: "", gathering: null, remoteStream: null, localStream: null, parts: {},
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }],
+  reset() {
+    try { if (this.dc) this.dc.close(); } catch (e) {}
+    try { if (this.pc) this.pc.close(); } catch (e) {}
+    this.pc = null; this.dc = null; this.parts = {};
+    youBus.emit("link", "idle");
+  },
+  waitIce(pc) {
+    return new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") return resolve();
+      const done = () => { if (pc.iceGatheringState === "complete") { pc.removeEventListener("icegatheringstatechange", done); resolve(); } };
+      pc.addEventListener("icegatheringstatechange", done);
+      setTimeout(resolve, 3500);
+    });
+  },
+  bindPc(pc) {
+    this.pc = pc;
+    pc.ontrack = (ev) => {
+      const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([ev.track]);
+      this.remoteStream = stream;
+      youBus.emit("remote", stream);
+    };
+    pc.onconnectionstatechange = () => youBus.emit("link", pc.connectionState);
+    pc.onicecandidate = () => {};
+  },
+  bindDc(dc, chatId) {
+    this.dc = dc;
+    this.chatId = chatId || this.chatId;
+    dc.onopen = () => { youBus.emit("link", "open"); if (this.chatId) youBus.emit("open", this.chatId); };
+    dc.onclose = () => youBus.emit("link", "closed");
+    dc.onmessage = (ev) => this.onData(ev.data);
+  },
+  sendRaw(obj) {
+    if (!this.dc || this.dc.readyState !== "open") return false;
+    try { this.dc.send(JSON.stringify(obj)); return true; } catch (e) { return false; }
+  },
+  sendChunks(head, data) {
+    const size = 9000;
+    const n = Math.max(1, Math.ceil(data.length / size));
+    const id = "m" + Date.now() + Math.floor(Math.random() * 999);
+    for (let i = 0; i < n; i++) this.sendRaw(Object.assign({}, head, { id, i, n, d: data.slice(i * size, (i + 1) * size) }));
+    return id;
+  },
+  onData(raw) {
+    let msg = null;
+    try { msg = JSON.parse(raw); } catch (e) { return; }
+    if (!msg) return;
+    if (msg.t === "sig" && msg.sdp) { this.takeSignal(msg.sdp); return; }
+    if (msg.t === "call") { youBus.emit("call", msg); return; }
+    if (msg.t === "txt") { this.pushIncoming({ id: msg.id, mine: false, kind: "text", text: msg.text || "", time: msg.time || Date.now() }); return; }
+    if (msg.t === "img" || msg.t === "aud") {
+      const bag = this.parts[msg.id] || { n: msg.n, got: [], kind: msg.t, time: msg.time };
+      bag.got[msg.i] = msg.d || "";
+      this.parts[msg.id] = bag;
+      if (bag.got.filter(Boolean).length >= bag.n) {
+        const data = bag.got.join("");
+        delete this.parts[msg.id];
+        const url = msg.t === "img" ? data : URL.createObjectURL(new Blob([youFromB64(data)], { type: "audio/webm" }));
+        this.pushIncoming({ id: msg.id, mine: false, kind: msg.t === "img" ? "image" : "audio", url, time: msg.time || Date.now() });
+      }
+    }
+  },
+  pushIncoming(message) {
+    if (!this.chatId) return;
+    youPatchChat(this.chatId, (c) => {
+      c.messages = (c.messages || []).concat([message]);
+      c.preview = message.kind === "text" ? message.text : message.kind === "image" ? "صورة" : "رسالة صوتية";
+      c.time = message.time;
+      if (location.hash.indexOf("/you-chat/" + this.chatId) < 0) c.unread = (c.unread || 0) + 1;
+      return c;
+    });
+  },
+  async takeSignal(sdp) {
+    if (!this.pc) return;
+    await this.pc.setRemoteDescription(sdp);
+    if (sdp.type === "offer") {
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+      await this.waitIce(this.pc);
+      this.sendRaw({ t: "sig", sdp: this.pc.localDescription });
+    }
+  },
+  async makeOffer(chatId) {
+    this.reset();
+    this.chatId = chatId;
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.bindPc(pc);
+    const dc = pc.createDataChannel("apkchat");
+    this.bindDc(dc, chatId);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await this.waitIce(pc);
+    return youEncodeCode({ role: "offer", sdp: pc.localDescription });
+  },
+  async takeOffer(code, chatId) {
+    const data = youDecodeCode(code);
+    if (!data || data.role !== "offer" || !data.sdp) throw new Error("bad-offer");
+    this.reset();
+    this.chatId = chatId;
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.bindPc(pc);
+    pc.ondatachannel = (ev) => this.bindDc(ev.channel, chatId);
+    await pc.setRemoteDescription(data.sdp);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await this.waitIce(pc);
+    return youEncodeCode({ role: "answer", sdp: pc.localDescription });
+  },
+  async takeAnswer(code) {
+    const data = youDecodeCode(code);
+    if (!data || data.role !== "answer" || !data.sdp) throw new Error("bad-answer");
+    if (!this.pc) throw new Error("no-pc");
+    await this.pc.setRemoteDescription(data.sdp);
+  },
+  async ensureSenders(kind) {
+    const md = await navigator.mediaDevices.getUserMedia(kind === "video" ? { audio: true, video: { facingMode: "user" } } : { audio: true });
+    this.localStream = md;
+    youBus.emit("local", md);
+    if (!this.pc) return md;
+    md.getTracks().forEach((track) => {
+      const has = this.pc.getSenders().some((s) => s.track && s.track.kind === track.kind);
+      if (!has) this.pc.addTrack(track, md);
+    });
+    if (this.dc && this.dc.readyState === "open") {
+      const offer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+      this.sendRaw({ t: "sig", sdp: this.pc.localDescription });
+    }
+    return md;
+  },
+  hangup() {
+    if (this.localStream) this.localStream.getTracks().forEach((t) => t.stop());
+    this.localStream = null;
+    youBus.emit("local", null);
+    this.sendRaw({ t: "call", act: "end" });
+    youBus.emit("call", { act: "end" });
+  }
+};
+const youShareCode = async (code) => {
+  const text = "رمز اتصال APKDroid P2P:\n" + code;
+  try { if (navigator.clipboard) await navigator.clipboard.writeText(text); } catch (e) {}
+  const url = "https://wa.me/?text=" + encodeURIComponent(text);
+  const w = window.open(url, "_blank", "noopener");
+  if (!w) location.href = url;
+};
+const YouSvg = ({ d, size, box }) => React.createElement("svg", { width: size || 22, height: size || 22, viewBox: box || "0 0 24 24", fill: "currentColor", "aria-hidden": "true" }, React.createElement("path", { d }));
+const ICO = {
+  logo: "M27.367,29.304C27.367,30.243 26.651,30.845 25.443,30.845L24.49,30.845L24.49,27.888C24.666,27.856 25,27.809 25.586,27.809C26.698,27.826 27.367,28.319 27.367,29.304ZM56.299,30.449C56.304,32.471 55.5,34.412 54.067,35.838L50.842,39.063L50.842,43.622C50.842,47.824 47.423,51.243 43.223,51.243L38.662,51.243L35.437,54.468C34.001,55.906 32.087,56.7 30.05,56.7C28.013,56.7 26.099,55.906 24.659,54.464L21.438,51.245L16.877,51.245C14.855,51.251 12.914,50.447 11.488,49.013C10.055,47.586 9.252,45.646 9.258,43.624L9.258,39.061L6.033,35.838C4.593,34.399 3.801,32.485 3.801,30.449C3.801,28.413 4.595,26.498 6.033,25.06L9.258,21.837L9.258,17.28C9.258,13.078 12.677,9.658 16.877,9.658L21.436,9.658L24.663,6.432C26.099,4.994 28.013,4.2 30.05,4.2C32.087,4.2 34.001,4.994 35.441,6.436L38.662,9.655L43.223,9.655C45.257,9.655 47.171,10.448 48.61,11.886C50.044,13.312 50.848,15.253 50.842,17.276L50.842,21.835L54.067,25.06C55.5,26.487 56.304,28.427 56.299,30.449ZM20.266,26.093L13.719,26.093L13.719,36.805L16.151,36.805L16.151,32.498L19.997,32.498L19.997,30.527L16.151,30.527L16.151,28.08L20.268,28.08L20.268,26.093ZM30.179,36.805C29.972,36.392 29.64,34.993 29.305,33.786C29.035,32.8 28.622,32.085 27.874,31.784L27.874,31.736C28.795,31.403 29.765,30.466 29.765,29.098C29.765,28.112 29.415,27.365 28.78,26.857C28.018,26.254 26.905,26.014 25.315,26.014C24.028,26.014 22.867,26.11 22.088,26.237L22.088,36.805L24.488,36.805L24.488,32.593L25.22,32.593C26.205,32.609 26.666,32.974 26.952,34.311C27.271,35.63 27.525,36.504 27.698,36.805L30.179,36.805ZM38.342,34.819L33.938,34.819L33.938,32.277L37.881,32.277L37.881,30.305L33.938,30.305L33.938,28.08L38.12,28.08L38.12,26.093L31.508,26.093L31.508,36.805L38.342,36.805L38.342,34.819ZM46.825,34.819L42.422,34.819L42.422,32.277L46.364,32.277L46.364,30.305L42.422,30.305L42.422,28.08L46.603,28.08L46.603,26.093L39.991,26.093L39.991,36.805L46.825,36.805L46.825,34.819Z",
+  chat: "M16,2L4,2a3,3 0,0 0,-3 3v8a3,3 0,0 0,3 3h1v2.14a0.8,0.8 0,0 0,1.188 0.7L11.3,16L16,16a3,3 0,0 0,3 -3L19,5a3,3 0,0 0,-3 -3ZM4,4h12a1,1 0,0 1,1 1v8a1,1 0,0 1,-1 1h-5.218l-0.452,0.252L7,16.1L7,14L4,14a1,1 0,0 1,-1 -1L3,5a1,1 0,0 1,1 -1ZM21,6.174A3,3 0,0 1,23 9v8a3,3 0,0 1,-2.846 2.996L20,20v2.14a0.8,0.8 0,0 1,-1.189 0.7L13.701,20L8.216,20l3.6,-2h2.402l0.453,0.252L18,20.101L18,18.05l1.95,-0.05 0.113,-0.003A1,1 0,0 0,21 17L21,6.174Z",
+  head: "M12,3a9,9 0,0 0,-9 9v7a2,2 0,0 0,2 2h2a2,2 0,0 0,2 -2v-4a2,2 0,0 0,-2 -2H5v-1a7,7 0,1 1,14 0v1h-2a2,2 0,0 0,-2 2v4a2,2 0,0 0,2 2h2a2,2 0,0 0,2 -2v-7a9,9 0,0 0,-9 -9Z",
+  bag: "M19,6h-2c0,-2.76 -2.24,-5 -5,-5S7,3.24 7,6L5,6c-1.1,0 -2,0.9 -2,2v12c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2L21,8c0,-1.1 -0.9,-2 -2,-2zM12,3c1.66,0 3,1.34 3,3L9,6c0,-1.66 1.34,-3 3,-3zM19,20L5,20L5,8h14v12zM12,12c-1.66,0 -3,-1.34 -3,-3L7,9c0,2.76 2.24,5 5,5s5,-2.24 5,-5h-2c0,1.66 -1.34,3 -3,3z",
+  phone: "M15.659,14.026L14.42,14.496C13.855,14.709 13.217,14.667 12.733,14.306C11.321,13.253 10.26,11.796 9.686,10.123C9.49,9.548 9.64,8.921 10.011,8.442L10.826,7.388C11.336,6.729 11.394,5.828 10.972,5.121L9.683,2.959C9.2,2.148 8.212,1.797 7.317,2.118L5.702,2.696C3.803,3.376 2.681,5.358 3.08,7.328L3.286,8.343C4.375,13.726 7.736,18.341 12.502,21L13.4,21.501C15.144,22.474 17.355,21.987 18.566,20.362L19.595,18.981C20.166,18.215 20.13,17.159 19.507,16.451L17.848,14.563C17.305,13.946 16.435,13.733 15.659,14.026Z",
+  video: "M160,800Q127,800 103.5,776.5Q80,753 80,720L80,240Q80,207 103.5,183.5Q127,160 160,160L640,160Q673,160 696.5,183.5Q720,207 720,240L720,420L846,294Q856,284 868,289Q880,294 880,308L880,652Q880,666 868,671Q856,676 846,666L720,540L720,720Q720,753 696.5,776.5Q673,800 640,800L160,800Z",
+  image: "M19,1H5C2.794,1 1,2.794 1,5v14c0,2.206 1.794,4 4,4h14c2.206,0 4,-1.794 4,-4V5c0,-2.206 -1.794,-4 -4,-4ZM6.501,5c0.828,0 1.5,0.672 1.5,1.5s-0.672,1.5 -1.5,1.5 -1.5,-0.672 -1.5,-1.5 0.672,-1.5 1.5,-1.5ZM19.996,18.437c0,0.86 -0.699,1.56 -1.559,1.56H5.564c-0.86,0 -1.56,-0.7 -1.56,-1.56v-3.253l1.128,-1.128c0.765,-0.762 1.996,-0.771 2.777,-0.037l2.725,2.716 5.405,-5.404c0.377,-0.378 0.884,-0.586 1.414,-0.586 0.517,0 0.984,0.193 1.355,0.537l1.188,1.189v5.965Z",
+  send: "M7.234,22.485L20.706,15.073C21.762,14.492 22.525,13.44 22.609,12.238C22.705,10.856 22.024,9.613 20.831,8.957L7.375,1.555C6.002,0.799 4.283,0.816 3.017,1.739C1.962,2.509 1.382,3.67 1.382,4.902C1.382,5.259 1.43,5.621 1.53,5.981L2.713,10.271C2.831,10.698 3.22,10.995 3.663,10.995H15.715C16.26,10.995 16.702,11.436 16.702,11.981C16.702,12.525 16.26,12.967 15.715,12.967H3.663C3.22,12.967 2.831,13.263 2.713,13.691L1.576,17.811C1.153,19.348 1.584,21.047 2.812,22.063C4.087,23.118 5.79,23.278 7.234,22.485Z",
+  mic: "M395-435q-35-35-35-85v-240q0-50 35-85t85-35q50 0 85 35t35 85v240q0 50-35 85t-85 35q-50 0-85-35Zm85-205Zm-40 520v-123q-104-14-172-93t-68-184h80q0 83 58.5 141.5T480-320q83 0 141.5-58.5T680-520h80q0 105-68 184t-172 93v123h-80Zm68.5-371.5Q520-503 520-520v-240q0-17-11.5-28.5T480-800q-17 0-28.5 11.5T440-760v240q0 17 11.5 28.5T480-480q17 0 28.5-11.5Z"
+};
+const YouCodeBoxes = ({ code }) => React.createElement("div", { className: "you-codes" }, (code || "").match(/.{1,4}/g) ? (code.match(/.{1,4}/g) || []).map((part, i) => React.createElement("span", { key: i, className: "you-code-box" }, part)) : React.createElement("span", { className: "you-code-box" }, "····"));
+const YouPage = ({ nav }) => {
+  const [free, setFree] = useState(false);
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState([]);
+  const [ld, setLd] = useState(true);
+  useEffect(() => {
+    let stop = false;
+    setLd(true);
+    const file = free ? "res/apps/list.json" : "res/apps/list2.json";
+    fetch(file).then((r) => r.json()).then((d) => { if (!stop) setItems(Array.isArray(d) ? d : []); }).catch(() => { if (!stop) setItems([]); }).finally(() => { if (!stop) setLd(false); });
+    return () => { stop = true; };
+  }, [free]);
+  const query = q.trim();
+  const shown = items.filter((it) => !query || String(it.name || "").indexOf(query) >= 0 || String(it.name || "").toLowerCase().indexOf(query.toLowerCase()) >= 0);
+  const apps = shown.filter((it) => it.kind !== "game");
+  const games = shown.filter((it) => it.kind === "game");
+  const iconBase = free ? "res/apps/apps_icons/" : "res/apps/apps_icons2/";
+  const openItem = (it) => nav("/you-app/" + (free ? "free" : "paid") + "/" + encodeURIComponent(it.id));
+  const card = (it) => React.createElement("button", { key: it.id, type: "button", className: "you-card", onClick: () => openItem(it) }, React.createElement("img", { src: iconBase + it.file, alt: "" }), React.createElement("span", null, it.name));
+  return React.createElement("div", { className: "you-page" },
+    React.createElement("div", { className: "you-top-scroll" },
+      React.createElement("input", { className: "you-search", value: q, onChange: (e) => setQ(e.target.value), placeholder: "بحث في هذا القسم", "aria-label": "بحث في هذا القسم" }),
+      React.createElement("button", { type: "button", className: "you-tool" + (free ? " on" : ""), onClick: () => setFree((v) => !v) }, React.createElement(YouSvg, { d: ICO.logo, size: 22, box: "0 0 60 60" }), React.createElement("span", null, "مجاني")),
+      React.createElement("button", { type: "button", className: "you-tool", onClick: () => nav("/you-chat") }, React.createElement(YouSvg, { d: ICO.chat, size: 20 }), React.createElement("span", null, "دردشة")),
+      React.createElement("button", { type: "button", className: "you-tool", onClick: () => window.open("https://t.me/apkdroidstore", "_blank", "noopener") }, React.createElement(YouSvg, { d: ICO.head, size: 20 }), React.createElement("span", null, "فريق الدعم")),
+      React.createElement("button", { type: "button", className: "you-tool", onClick: () => nav("/you-store") }, React.createElement(YouSvg, { d: ICO.bag, size: 20 }), React.createElement("span", null, "متجري"))
+    ),
+    ld ? React.createElement("p", { className: "you-empty" }, "جارٍ تحميل المحتوى") : React.createElement(React.Fragment, null,
+      React.createElement("section", { className: "you-sec" }, React.createElement("h2", null, "تطبيقات"), apps.length ? React.createElement("div", { className: "you-grid" }, apps.map(card)) : React.createElement("p", { className: "you-empty" }, "لا توجد تطبيقات")),
+      React.createElement("section", { className: "you-sec" }, React.createElement("h2", null, "ألعاب"), games.length ? React.createElement("div", { className: "you-grid" }, games.map(card)) : React.createElement("p", { className: "you-empty" }, "لا توجد ألعاب"))
+    )
+  );
+};
+const YouLocalDetail = ({ route, nav }) => {
+  const parts = String(route || "").split("/");
+  const src = parts[2] === "free" ? "free" : "paid";
+  const id = decodeURIComponent(parts[3] || "");
+  const [item, setItem] = useState(null);
+  const [miss, setMiss] = useState(false);
+  useEffect(() => {
+    let stop = false;
+    const file = src === "free" ? "res/apps/list.json" : "res/apps/list2.json";
+    fetch(file).then((r) => r.json()).then((d) => {
+      if (stop) return;
+      const found = (Array.isArray(d) ? d : []).find((x) => String(x.id) === String(id));
+      setItem(found || null); setMiss(!found);
+    }).catch(() => { if (!stop) setMiss(true); });
+    return () => { stop = true; };
+  }, [src, id]);
+  const buy = src !== "free";
+  const go = () => { if (item && item.https) window.open(item.https, "_blank", "noopener"); };
+  const icon = item ? ((src === "free" ? "res/apps/apps_icons/" : "res/apps/apps_icons2/") + item.file) : "";
+  return React.createElement("div", { className: "pb-24 you-detail" },
+    React.createElement("button", { type: "button", className: "bg-detail-back-btn", onClick: () => nav("/you") }, "رجوع"),
+    !item ? React.createElement("p", { className: "you-empty" }, miss ? "العنصر غير موجود" : "جارٍ فتح الصفحة") : React.createElement("div", { className: "bg-detail" },
+      React.createElement("div", { className: "bg-detail-header" },
+        React.createElement("img", { className: "bg-detail-icon", src: icon, alt: "" }),
+        React.createElement("div", { className: "bg-detail-info" },
+          React.createElement("div", { className: "bg-detail-title-row" }, React.createElement("h1", { className: "bg-detail-name" }, item.name)),
+          React.createElement("div", { className: "bg-detail-dev" }, "APKDroid"),
+          React.createElement("div", { className: "bg-detail-meta" }, React.createElement("span", null, item.kind === "game" ? "لعبة" : "تطبيق"))
+        )
+      ),
+      React.createElement("div", { className: "bg-detail-actions" }, React.createElement("button", { type: "button", className: "bg-btn-install", onClick: go }, buy ? "شراء" : "تثبيت")),
+      React.createElement("section", { className: "bg-detail-section" }, React.createElement("h3", null, "حول"), React.createElement("p", { className: "you-about" }, "لقطات الشاشة والوصف غير مضافين لهذا العنصر، لذلك تبقى الحقول الناقصة فارغة مثل صفحة التثبيت الأصلية."))
+    )
+  );
+};
+const YouStorePage = ({ nav }) => React.createElement("div", { className: "you-store" },
+  React.createElement("button", { type: "button", className: "bg-detail-back-btn", onClick: () => nav("/you") }, "رجوع"),
+  React.createElement("h1", null, "متجري"),
+  React.createElement("p", null, "ارفع تطبيقك إلى متجر APKDroid عبر البريد."),
+  React.createElement("a", { className: "you-upload", href: "mailto:apkdroidstore30@gmail.com?subject=I want to upload my app to the APKDroid store." }, "رفع تطبيق على APKDroid")
+);
+const YouChatPage = ({ route, nav }) => {
+  const chatId = (String(route || "").split("/")[2] || "");
+  const [chats, setChats] = useState(youLoadChats);
+  const [mode, setMode] = useState("list");
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [peer, setPeer] = useState("");
+  const [note, setNote] = useState("");
+  const [text, setText] = useState("");
+  const [rec, setRec] = useState(false);
+  const [call, setCall] = useState(null);
+  const [localUrl, setLocalUrl] = useState("");
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const recRef = useRef(null);
+  const chunksRef = useRef([]);
+  const fileRef = useRef(null);
+  const scRef = useRef(null);
+  useEffect(() => youBus.on("chats", setChats), []);
+  useEffect(() => { if (scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [chats, chatId]);
+  useEffect(() => youBus.on("open", (id) => { if (id) nav("/you-chat/" + id); }), [nav]);
+  useEffect(() => youBus.on("call", (msg) => {
+    if (!msg) return;
+    if (msg.act === "invite") setCall({ kind: msg.kind || "audio", incoming: true });
+    if (msg.act === "end") { setCall(null); setLocalUrl(""); setRemoteUrl(""); }
+  }), []);
+  useEffect(() => youBus.on("local", (stream) => setLocalUrl(stream ? URL.createObjectURL(stream) : "")), []);
+  useEffect(() => youBus.on("remote", (stream) => setRemoteUrl(stream ? URL.createObjectURL(stream) : "")), []);
+  const active = chats.find((c) => c.id === chatId) || null;
+  useEffect(() => { if (active && active.unread) youPatchChat(active.id, (c) => { c.unread = 0; return c; }); }, [chatId]);
+  const startAdd = () => { setMode("add"); setCode(""); setPeer(""); setNote(""); setName(""); };
+  const createCode = async () => {
+    const label = name.trim() || "جهة اتصال";
+    const id = "c" + Date.now();
+    youUpsertChat({ id, name: label, preview: "بانتظار الاتصال", time: Date.now(), unread: 0, messages: [] });
+    youP2P.chatId = id;
+    setNote("يتم جمع الرمز");
+    try {
+      const made = await youP2P.makeOffer(id);
+      setCode(made); setNote("انسخ الرمز وشاركه، ثم الصق رمز الطرف الآخر.");
+    } catch (e) { setNote("تعذر إنشاء الاتصال على هذا الجهاز"); }
+  };
+  const shareMine = () => { if (code) youShareCode(code); };
+  const joinPeer = async () => {
+    const label = name.trim() || "جهة اتصال";
+    const id = youP2P.chatId || ("c" + Date.now());
+    if (!youLoadChats().some((c) => c.id === id)) youUpsertChat({ id, name: label, preview: "بانتظار الاتصال", time: Date.now(), unread: 0, messages: [] });
+    youP2P.chatId = id;
+    setNote("جارٍ الربط");
+    try {
+      const decoded = youDecodeCode(peer);
+      if (decoded.role === "offer") {
+        const answer = await youP2P.takeOffer(peer, id);
+        setCode(answer); setNote("أرسل رمز الرد هذا للطرف الآخر.");
+      } else {
+        await youP2P.takeAnswer(peer);
+        setNote("تم إدخال رمز الرد. ستفتح الدردشة عند اكتمال الاتصال.");
+      }
+    } catch (e) { setNote("الرمز غير صالح"); }
+  };
+  const current = () => youLoadChats().find((c) => c.id === chatId);
+  const pushMine = (message, preview) => {
+    youPatchChat(chatId, (c) => { c.messages = (c.messages || []).concat([message]); c.preview = preview; c.time = message.time; c.unread = 0; return c; });
+  };
+  const sendText = () => {
+    const value = text.trim();
+    if (!value || !chatId) return;
+    const message = { id: "t" + Date.now(), mine: true, kind: "text", text: value, time: Date.now() };
+    pushMine(message, value);
+    youP2P.chatId = chatId;
+    youP2P.sendRaw({ t: "txt", id: message.id, text: value, time: message.time });
+    setText("");
+  };
+  const onFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file || !chatId) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || "");
+      const message = { id: "i" + Date.now(), mine: true, kind: "image", url, time: Date.now() };
+      pushMine(message, "صورة");
+      youP2P.chatId = chatId;
+      youP2P.sendChunks({ t: "img", time: message.time }, url);
+    };
+    reader.readAsDataURL(file);
+  };
+  const toggleMic = async () => {
+    if (recRef.current) {
+      recRef.current.stop();
+      setRec(false);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      mr.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunksRef.current.push(ev.data); };
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
+        const url = URL.createObjectURL(blob);
+        const message = { id: "a" + Date.now(), mine: true, kind: "audio", url, time: Date.now() };
+        pushMine(message, "رسالة صوتية");
+        const fr = new FileReader();
+        fr.onload = () => { const raw = String(fr.result || "").split(",")[1] || ""; youP2P.chatId = chatId; youP2P.sendChunks({ t: "aud", time: message.time }, raw); };
+        fr.readAsDataURL(blob);
+        recRef.current = null;
+      };
+      recRef.current = mr;
+      mr.start();
+      setRec(true);
+    } catch (e) { setNote("تعذر استخدام الميكروفون"); }
+  };
+  const startCall = async (kind) => {
+    try {
+      youP2P.chatId = chatId;
+      await youP2P.ensureSenders(kind);
+      youP2P.sendRaw({ t: "call", act: "invite", kind });
+      setCall({ kind, incoming: false });
+    } catch (e) { setNote("تعذر بدء المكالمة"); }
+  };
+  const acceptCall = async () => {
+    if (!call) return;
+    try { await youP2P.ensureSenders(call.kind); youP2P.sendRaw({ t: "call", act: "accept", kind: call.kind }); setCall(Object.assign({}, call, { incoming: false })); } catch (e) { setNote("تعذر قبول المكالمة"); }
+  };
+  if (!chatId) {
+    return React.createElement("div", { className: "wa-page" },
+      React.createElement("header", { className: "wa-head" }, React.createElement("button", { type: "button", className: "wa-icon-btn", onClick: () => nav("/you"), "aria-label": "رجوع" }, "›"), React.createElement("h1", null, "دردشة"), React.createElement("span", null)),
+      mode === "add" ? React.createElement("div", { className: "wa-add" },
+        React.createElement("h2", null, "الاتصال بشبكة P2P"),
+        React.createElement("input", { className: "wa-input", value: name, onChange: (e) => setName(e.target.value), placeholder: "اسم جهة الاتصال" }),
+        React.createElement("button", { type: "button", className: "wa-green", onClick: createCode }, "إنشاء رمز الاتصال"),
+        React.createElement(YouCodeBoxes, { code }),
+        React.createElement("button", { type: "button", className: "wa-share", onClick: shareMine, disabled: !code }, "مشاركة الكود مع"),
+        React.createElement("textarea", { className: "wa-input wa-area", value: peer, onChange: (e) => setPeer(e.target.value), placeholder: "الصق رمز الطرف الآخر هنا" }),
+        React.createElement("button", { type: "button", className: "wa-green", onClick: joinPeer }, "ربط"),
+        note ? React.createElement("p", { className: "wa-note" }, note) : null,
+        React.createElement("button", { type: "button", className: "wa-text", onClick: () => setMode("list") }, "رجوع للقائمة")
+      ) : React.createElement("div", { className: "wa-list" },
+        !chats.length ? React.createElement("button", { type: "button", className: "wa-empty", onClick: startAdd }, "أضف جهة اتصال جديدة") : null,
+        chats.map((c) => React.createElement("button", { key: c.id, type: "button", className: "wa-row", onClick: () => nav("/you-chat/" + c.id) },
+          React.createElement("span", { className: "wa-av" }, (c.name || "؟").slice(0, 1)),
+          React.createElement("span", { className: "wa-mid" }, React.createElement("strong", null, c.name), React.createElement("em", null, c.preview || "ابدأ المحادثة"), c.unread ? React.createElement("b", null, c.unread) : null),
+          React.createElement("span", { className: "wa-time" }, youFmtTime(c.time))
+        )),
+        React.createElement("button", { type: "button", className: "wa-fab", onClick: startAdd }, "+")
+      )
+    );
+  }
+  const messages = (current() || active || { messages: [] }).messages || [];
+  return React.createElement("div", { className: "wa-page wa-thread" },
+    React.createElement("header", { className: "wa-head" },
+      React.createElement("button", { type: "button", className: "wa-icon-btn", onClick: () => nav("/you-chat"), "aria-label": "رجوع" }, "›"),
+      React.createElement("h1", null, (active && active.name) || "دردشة"),
+      React.createElement("span", { className: "wa-calls" },
+        React.createElement("button", { type: "button", className: "wa-icon-btn", onClick: () => startCall("audio"), "aria-label": "مكالمة صوتية" }, React.createElement(YouSvg, { d: ICO.phone, size: 22 })),
+        React.createElement("button", { type: "button", className: "wa-icon-btn", onClick: () => startCall("video"), "aria-label": "مكالمة فيديو" }, React.createElement(YouSvg, { d: ICO.video, size: 24, box: "0 0 960 960" }))
+      )
+    ),
+    React.createElement("div", { className: "wa-stream", ref: scRef }, messages.map((m) => React.createElement("div", { key: m.id, className: "wa-bubble " + (m.mine ? "mine" : "theirs") },
+      m.kind === "image" ? React.createElement("img", { src: m.url, alt: "" }) : m.kind === "audio" ? React.createElement("audio", { controls: true, src: m.url }) : React.createElement("p", null, m.text),
+      React.createElement("small", null, youFmtTime(m.time))
+    ))),
+    call ? React.createElement("div", { className: "wa-call" },
+      React.createElement("strong", null, call.kind === "video" ? "مكالمة فيديو" : "مكالمة صوتية"),
+      React.createElement("video", { className: "wa-remote", autoPlay: true, playsInline: true, ref: (el) => { if (el && youP2P.remoteStream) el.srcObject = youP2P.remoteStream; } }),
+      React.createElement("video", { className: "wa-local", autoPlay: true, muted: true, playsInline: true, ref: (el) => { if (el && youP2P.localStream) el.srcObject = youP2P.localStream; } }),
+      call.incoming ? React.createElement("button", { type: "button", className: "wa-green", onClick: acceptCall }, "قبول") : null,
+      React.createElement("button", { type: "button", className: "wa-end", onClick: () => { youP2P.hangup(); setCall(null); } }, "إنهاء")
+    ) : null,
+    React.createElement("form", { className: "wa-compose", onSubmit: (e) => { e.preventDefault(); sendText(); } },
+      React.createElement("input", { ref: fileRef, type: "file", accept: "image/*", hidden: true, onChange: onFile }),
+      React.createElement("button", { type: "button", className: "wa-icon-btn", onClick: () => fileRef.current && fileRef.current.click(), "aria-label": "مشاركة صورة" }, React.createElement(YouSvg, { d: ICO.image, size: 22 })),
+      React.createElement("button", { type: "button", className: "wa-icon-btn" + (rec ? " rec" : ""), onClick: toggleMic, "aria-label": "رسالة صوتية" }, React.createElement(YouSvg, { d: ICO.mic, size: 24, box: "0 -960 960 960" })),
+      React.createElement("input", { className: "wa-box", value: text, onChange: (e) => setText(e.target.value), placeholder: "مراسلة" }),
+      React.createElement("button", { type: "submit", className: "wa-send", "aria-label": "إرسال" }, React.createElement(YouSvg, { d: ICO.send, size: 22 }))
+    )
+  );
+};
+const Music=({play})=>{
+  const initQ=(()=>{try{return new URLSearchParams((location.hash.split('?')[1]||'')).get('q')||''}catch{return ''}})();
+  const[songs,setSongs]=useState([]);const[q,setQ]=useState(initQ);const[ld,setLd]=useState(true);
+  useEffect(()=>{if(initQ){setLd(true);api.songs(initQ).then(setSongs).catch(()=>{}).finally(()=>setLd(false))}else{api.songs().then(setSongs).catch(()=>{}).finally(()=>setLd(false))}},[]);
+  useEffect(()=>{
+    if(!q.trim())return;
+    const timer=setTimeout(()=>{
+      setLd(true);
+      pushSearchHist(q,'music');
+      api.songs(q).then(setSongs).catch(()=>{}).finally(()=>setLd(false));
+    },350);
+    return()=>clearTimeout(timer);
+  },[q]);
+  return(
+    <div className="pb-20 sm:pb-8">
+      <div className="px-4 pt-3"><div className="flex items-center gap-2 bg-[hsl(var(--muted))]/60 rounded-full px-4 py-2.5"><Icon name="search" className="w-4 h-4 text-muted-foreground"></Icon><input value={q} onChange={e=>setQ(e.target.value)} placeholder={t('search_songs')} className="flex-1 bg-transparent outline-none text-sm"/></div></div>
+      <h2 className="font-semibold px-4 mt-5 mb-3">{q?t('results'):t('top_songs')}</h2>
+      {ld?<div className="px-4 space-y-3">{Array(6).fill(0).map((_,i)=><Skel key={i} c="h-14"></Skel>)}</div>:
+        songs.map(s=><button key={s.trackId} onClick={()=>play(s,songs)} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-[hsl(var(--muted))]/50 text-left"><img src={s.artworkUrl100||s.artworkUrl60} className="w-12 h-12 rounded-lg object-cover" alt=""/><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{s.trackName}</p><p className="text-xs text-muted-foreground truncate">{s.artistName}</p></div>{s.previewUrl&&<Icon name="play" className="w-5 h-5 text-primary shrink-0"></Icon>}</button>)}
+    </div>
+  );
+};
+
 
 const SettingsSpinner=()=>(
   <div className="set-spin-screen" role="status" aria-label="loading">
@@ -3438,7 +3880,10 @@ function App(){
   else if(isDetail){const _p=route.split('?');const _id=(_p[0].split('/')[2]||'');const _qi=new URLSearchParams(_p[1]||'').get('install')==='1';page=<Detail id={_id} nav={nav} favs={favs} toggle={toggle} selStore={selStore} expMode={expMode} setDetailApp={setDetailApp} autoInstall={_qi} onToggleTheme={toggleTheme} isDark={isDarkNow}></Detail>}
   else if(route==='/favorites')page=<Favs favs={favs} songFavs={songFavs} open={open} toggle={toggle} toggleSongFav={toggleSongFav} play={playFromList}></Favs>;
   else if(route==='/downloads')page=<DownloadsManager open={open}></DownloadsManager>;
-  else if(route==='/you'||route==='/music')page=<YouPage open={open}></YouPage>;
+  else if(route==='/you'||route==='/music')page=<YouPage nav={nav}></YouPage>;
+  else if(route==='/you-store')page=<YouStorePage nav={nav}></YouStorePage>;
+  else if(route.startsWith('/you-app/'))page=<YouLocalDetail route={route} nav={nav}></YouLocalDetail>;
+  else if(route==='/you-chat'||route.startsWith('/you-chat/'))page=<YouChatPage route={route} nav={nav}></YouChatPage>;
   else if(route==='/now-playing')page=<NowPlaying track={track} playing={playing} progress={progress} duration={duration} onToggle={togglePlay} onPrev={playPrev} onNext={playNext} onSeek={seekTo} onFav={toggleSongFav} isFav={isSongFav} nav={nav}></NowPlaying>;
   else if(route==='/equalizer')page=<EqualizerPage eqOn={eqOn} setEqOn={setEqOn} bands={bands} setBand={setBand} volume={volume} setVolume={setVolume} nav={nav}></EqualizerPage>;
   else if(route==='/settings')page=<Settings selStore={selStore} setSelStore={setSelStore} style2={style2} setStyle2={setStyle2} setExpMode={setExpMode} lang={lang} setLang={setLang} night={night} setNight={setNight} nav={nav}></Settings>;
@@ -3467,11 +3912,11 @@ function App(){
         ))}
       </AccPick>
       <main id="app-scroll" className="app-main max-w-screen-2xl mx-auto w-full">
-        {!(isDownloads||route==='/settings'||route==='/search-log'||accOpen||isDetail||route.startsWith('/search')||route==='/you'||route==='/music')&&<TopNav nav={nav} isDetail={isDetail} onOpenAccount={()=>setAccOpen(true)} route={route} photo={profile&&profile.photo}></TopNav>}
+        {!(isDownloads||route==='/settings'||route==='/search-log'||accOpen||isDetail||route.startsWith('/search')||route==='/you'||route==='/music'||route.startsWith('/you-'))&&<TopNav nav={nav} isDetail={isDetail} onOpenAccount={()=>setAccOpen(true)} route={route} photo={profile&&profile.photo}></TopNav>}
         <div className="app-scroll-fill">{page}</div>
       </main>
       {!hideMini&&<MiniPlayer track={track} playing={playing} progress={progress} duration={duration} onToggle={togglePlay} onClose={closeP} onPrev={playPrev} onNext={playNext} onSeek={seekTo} onOpen={()=>nav('/now-playing')} isFav={isSongFav} onFav={toggleSongFav}/>}
-      {!(isDownloads||route==='/settings'||route==='/search-log'||accOpen)&&<BottomNav route={route} nav={nav}></BottomNav>}
+      {!(isDownloads||route==='/settings'||route==='/search-log'||accOpen||route.startsWith('/you-chat')||route.startsWith('/you-app')||route==='/you-store')&&<BottomNav route={route} nav={nav}></BottomNav>}
       {offSheet&&<OfflineSheet onRetry={()=>{probeOnline().then(ok=>setOffSheet(!ok))}} onCancel={()=>{offHold.current=true;setOffSheet(false)}}></OfflineSheet>}
     </div>
   );
