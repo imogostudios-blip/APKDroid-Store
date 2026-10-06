@@ -1,0 +1,194 @@
+[
+  {
+    "id": "1_app1",
+    "file": "app1.png",
+    "name": "واتساب",
+    "https": "https://www.happymod.com/search.html?q=whatsapp",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "2_app2",
+    "file": "app2.png",
+    "name": "تيليجرام",
+    "https": "https://www.happymod.com/search.html?q=telegram",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "3_app3",
+    "file": "app3.png",
+    "name": "يوتيوب",
+    "https": "https://www.happymod.com/search.html?q=youtube",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "4_app4",
+    "file": "app4.png",
+    "name": "فيسبوك",
+    "https": "https://www.happymod.com/search.html?q=facebook",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "5_app5",
+    "file": "app5.png",
+    "name": "إنستغرام",
+    "https": "https://www.happymod.com/search.html?q=instagram",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "6_app6",
+    "file": "app6.png",
+    "name": "تيك توك",
+    "https": "https://www.happymod.com/search.html?q=tiktok",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "7_app7",
+    "file": "app7.png",
+    "name": "سناب شات",
+    "https": "https://www.happymod.com/search.html?q=snapchat",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "8_app8",
+    "file": "app8.png",
+    "name": "بينترست",
+    "https": "https://www.happymod.com/search.html?q=pinterest",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "9_app9",
+    "file": "app9.png",
+    "name": "سبوتيفاي",
+    "https": "https://www.happymod.com/search.html?q=spotify",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "10_app10",
+    "file": "app10.png",
+    "name": "نتفلكس",
+    "https": "https://www.happymod.com/search.html?q=netflix",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "11_app11",
+    "file": "app11.png",
+    "name": "كروم",
+    "https": "https://www.happymod.com/search.html?q=chrome",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "12_app12",
+    "file": "app12.png",
+    "name": "خرائط",
+    "https": "https://www.happymod.com/search.html?q=maps",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "13_app13",
+    "file": "app13.png",
+    "name": "جيميل",
+    "https": "https://www.happymod.com/search.html?q=gmail",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "14_app14",
+    "file": "app14.png",
+    "name": "صور",
+    "https": "https://www.happymod.com/search.html?q=photos",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "15_app15",
+    "file": "app15.png",
+    "name": "كاميرا",
+    "https": "https://www.happymod.com/search.html?q=camera",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "16_app16",
+    "file": "app16.png",
+    "name": "ملفات",
+    "https": "https://www.happymod.com/search.html?q=files",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "17_app17",
+    "file": "app17.png",
+    "name": "مترجم",
+    "https": "https://www.happymod.com/search.html?q=translate",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "18_app18",
+    "file": "app18.png",
+    "name": "آلة حاسبة",
+    "https": "https://www.happymod.com/search.html?q=calculator",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "19_app19",
+    "file": "app19.png",
+    "name": "ساعة",
+    "https": "https://www.happymod.com/search.html?q=clock",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "20_app20",
+    "file": "app20.png",
+    "name": "طقس",
+    "https": "https://www.happymod.com/search.html?q=weather",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "21_app21",
+    "file": "app21.png",
+    "name": "ملاحظات",
+    "https": "https://www.happymod.com/search.html?q=notes",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "22_app22",
+    "file": "app22.png",
+    "name": "تقويم",
+    "https": "https://www.happymod.com/search.html?q=calendar",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "23_app23",
+    "file": "app23.png",
+    "name": "متصفح",
+    "https": "https://www.happymod.com/search.html?q=browser",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  },
+  {
+    "id": "24_app24",
+    "file": "app24.png",
+    "name": "موسيقى",
+    "https": "https://www.happymod.com/search.html?q=music",
+    "developer": "APKDroid",
+    "category": "تطبيقات"
+  }
+]
