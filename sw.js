@@ -1,4 +1,4 @@
-const CACHE = 'apkdroid-v43';
+const CACHE = 'apkdroid-v53';
 const APP_SHELL = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const APP_SHELL = [
   './src/styles/tailwind.css',
   './src/styles/app.css',
   './src/app.js',
+  './src/you-section.js',
   './vendor/react.production.min.js',
   './vendor/react-dom.production.min.js',
   './res/fonts/fonts.css',
@@ -41,56 +42,24 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
-});
-
-const shellPath = (pathname) => {
-  return /\/(index\.html|src\/app\.js|src\/styles\/app\.css|src\/styles\/tailwind\.css|manifest\.json)$/.test(pathname)
-    || pathname.endsWith('/');
-};
-
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
-  const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;
-  // Never serve sw.js from cache, or the browser will never see a new version.
-  if (url.pathname.endsWith('/sw.js')) return;
-
-  if (shellPath(url.pathname)) {
-    event.respondWith((async () => {
-      try {
-        const res = await fetch(req, { cache: 'no-store' });
-        if (res && res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put(req, copy));
-        }
-        return res;
-      } catch (err) {
-        const cached = await caches.match(req, { ignoreSearch: true });
-        if (cached) return cached;
-        if (req.mode === 'navigate') {
-          const shell = await caches.match('./index.html');
-          if (shell) return shell;
-        }
-        return new Response('', { status: 504, statusText: 'Offline' });
-      }
-    })());
-    return;
-  }
-
   event.respondWith((async () => {
     const cached = await caches.match(req, { ignoreSearch: true });
     if (cached) return cached;
     try {
       const res = await fetch(req);
-      if (res && res.status === 200) {
+      if (res && res.status === 200 && req.url.startsWith(self.location.origin)) {
         const copy = res.clone();
         caches.open(CACHE).then((cache) => cache.put(req, copy));
       }
       return res;
     } catch (err) {
+      if (req.mode === 'navigate') {
+        const shell = await caches.match('./index.html');
+        if (shell) return shell;
+      }
       return new Response('', { status: 504, statusText: 'Offline' });
     }
   })());
