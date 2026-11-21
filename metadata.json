@@ -1,0 +1,6 @@
+{
+  "name": "Mersal — مرسال",
+  "description": "منصة مراسلة فورية ومكالمات صوتية شبيهة بواتساب مع معرفات مستخدمين فريدة ومشاركة الملفات والتسجيلات الصوتية.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}
